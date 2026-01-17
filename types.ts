@@ -40,4 +40,12 @@ export interface DriverSetting {
   description: string;
 }
 
+export interface BigQueryConfig {
+  projectId: string;
+  datasetId: string;
+  tableId: string;
+  accessToken: string;
+  enabled: boolean;
+}
+
 export type AppView = 'DASHBOARD' | 'UPLOAD' | 'FORECAST' | 'SCENARIO';
