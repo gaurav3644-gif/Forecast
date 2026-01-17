@@ -1,0 +1,5 @@
+{
+  "name": "PredictX Demand Planner",
+  "description": "An advanced demand planning and forecasting platform using AI to simulate XGBoost, Random Forest, and LightGBM models. Features data integration (ETL), scenario modeling, and forecast comparisons.",
+  "requestFramePermissions": []
+}
