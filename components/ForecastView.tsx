@@ -4,7 +4,8 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer 
 } from 'recharts';
 import { ForecastPoint, ItemMaster } from '../types';
-import { Brain, TrendingUp, AlertCircle, Loader2, Download, Filter, ChevronDown, Database, Cpu } from 'lucide-react';
+// Added RefreshCw to imports
+import { Brain, TrendingUp, AlertCircle, Loader2, Download, Filter, ChevronDown, Database, Cpu, FileDown, RefreshCw } from 'lucide-react';
 
 interface ForecastViewProps {
   data: ForecastPoint[];
@@ -53,7 +54,7 @@ const ForecastView: React.FC<ForecastViewProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `forecast_${source}_${filters.sku}.csv`);
+    link.setAttribute("download", `forecast_${source}_${new Date().toISOString().split('T')[0]}.csv`);
     link.click();
   };
 
@@ -86,12 +87,16 @@ const ForecastView: React.FC<ForecastViewProps> = ({
         </div>
         <div className="flex gap-3">
           {data.length > 0 && (
-            <button onClick={downloadCSV} className="bg-white border border-slate-200 hover:border-slate-300 text-slate-700 px-5 py-2.5 rounded-xl font-semibold transition-all flex items-center gap-2 shadow-sm text-sm">
-              <Download size={16} /> Export
+            <button 
+              onClick={downloadCSV} 
+              className="bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 px-5 py-2.5 rounded-xl font-bold transition-all flex items-center gap-2 shadow-sm text-sm"
+            >
+              <FileDown size={18} />
+              {source === 'BIGQUERY' ? 'Download BQ Dataset' : 'Download Forecast CSV'}
             </button>
           )}
           <button onClick={onGenerate} disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg shadow-blue-500/20 transition-all flex items-center gap-2 disabled:opacity-50 text-sm">
-            {isLoading ? <Loader2 className="animate-spin" size={18} /> : (source === 'BIGQUERY' ? <Database size={18} /> : <Brain size={18} />)}
+            {isLoading ? <Loader2 className="animate-spin" size={18} /> : (source === 'BIGQUERY' ? <RefreshCw size={18} /> : <Brain size={18} />)}
             {source === 'BIGQUERY' ? 'Fetch from BigQuery' : 'Generate Forecast'}
           </button>
         </div>

@@ -1,8 +1,8 @@
 
 import React, { useState } from 'react';
-import { Upload, FileText, CheckCircle, Trash2, Loader2, Database, Key, Globe, AlertCircle, RefreshCw } from 'lucide-react';
+import { Upload, FileText, CheckCircle, Trash2, Loader2, Database, Key, Globe, AlertCircle, RefreshCw, Table, Activity } from 'lucide-react';
 import { BigQueryConfig } from '../types';
-import { testBigQueryConnection } from '../services/bigQueryService';
+import { fetchForecastFromBigQuery } from '../services/bigQueryService';
 
 interface DataUploadProps {
   onDataLoaded: (type: 'SALES' | 'ITEM' | 'PROMO', data: any[]) => void;
@@ -24,45 +24,32 @@ const DataUpload: React.FC<DataUploadProps> = ({ onDataLoaded, bqConfig, setBqCo
   const [testingConn, setTestingConn] = useState(false);
   const [connStatus, setConnStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
-
-  const parseCSV = (text: string, type: 'SALES' | 'ITEM' | 'PROMO') => {
-    const lines = text.split('\n').filter(line => line.trim() !== '');
-    if (lines.length < 2) return [];
-
-    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-    const data = lines.slice(1).map(line => {
-      const values = line.split(',').map(v => v.trim());
-      const obj: any = {};
-      
-      headers.forEach((header, index) => {
-        let val: any = values[index];
-        if (['quantity', 'price', 'unitcost', 'discountpercent'].includes(header)) {
-          val = parseFloat(val) || 0;
-        }
-        obj[header] = val;
-      });
-
-      if (type === 'SALES') {
-        return { date: obj.date, sku: obj.sku, quantity: obj.quantity, price: obj.price };
-      } else if (type === 'ITEM') {
-        return { sku: obj.sku, category: obj.category, brand: obj.brand, unitCost: obj.unitcost };
-      } else if (type === 'PROMO') {
-        return { sku: obj.sku, startDate: obj.startdate || obj.date, endDate: obj.enddate || obj.date, discountPercent: obj.discountpercent };
-      }
-      return obj;
-    });
-
-    return data;
-  };
+  const [previewRows, setPreviewRows] = useState<any[]>([]);
+  const [previewFields, setPreviewFields] = useState<string[]>([]);
 
   const handleFileUpload = (type: 'SALES' | 'ITEM' | 'PROMO', file: File) => {
     setParsing(prev => ({ ...prev, [type]: true }));
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
-      const parsedData = parseCSV(text, type);
+      const lines = text.split('\n').filter(line => line.trim() !== '');
+      if (lines.length < 2) return;
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+      const data = lines.slice(1).map(line => {
+        const values = line.split(',').map(v => v.trim());
+        const obj: any = {};
+        headers.forEach((header, index) => {
+          let val: any = values[index];
+          if (['quantity', 'price', 'unitcost', 'discountpercent'].includes(header)) val = parseFloat(val) || 0;
+          obj[header] = val;
+        });
+        if (type === 'SALES') return { date: obj.date, sku: obj.sku, quantity: obj.quantity, price: obj.price };
+        if (type === 'ITEM') return { sku: obj.sku, category: obj.category, brand: obj.brand, unitCost: obj.unitcost };
+        if (type === 'PROMO') return { sku: obj.sku, startDate: obj.startdate || obj.date, endDate: obj.enddate || obj.date, discountPercent: obj.discountpercent };
+        return obj;
+      });
       setFiles(prev => ({ ...prev, [type]: file.name }));
-      onDataLoaded(type, parsedData);
+      onDataLoaded(type, data);
       setParsing(prev => ({ ...prev, [type]: false }));
     };
     reader.readAsText(file);
@@ -76,15 +63,24 @@ const DataUpload: React.FC<DataUploadProps> = ({ onDataLoaded, bqConfig, setBqCo
     }
     setTestingConn(true);
     setErrorMsg('');
+    setPreviewRows([]);
+    setPreviewFields([]);
     try {
-      const success = await testBigQueryConnection(
+      const result = await fetchForecastFromBigQuery(
         bqConfig.projectId,
         bqConfig.datasetId,
         bqConfig.tableId,
         bqConfig.accessToken
       );
-      setConnStatus(success ? 'success' : 'error');
-      if (!success) setErrorMsg("Connection failed. Check your token or table existence.");
+      
+      if (result.rawRows && result.rawRows.length > 0) {
+        setConnStatus('success');
+        setPreviewRows(result.rawRows.slice(0, 5));
+        setPreviewFields(result.fields);
+      } else {
+        setConnStatus('error');
+        setErrorMsg("Connected successfully, but the table returned 0 rows.");
+      }
     } catch (err: any) {
       setConnStatus('error');
       setErrorMsg(err.message || "Failed to connect to BigQuery.");
@@ -100,7 +96,7 @@ const DataUpload: React.FC<DataUploadProps> = ({ onDataLoaded, bqConfig, setBqCo
   ];
 
   return (
-    <div className="space-y-12">
+    <div className="space-y-12 pb-20">
       <div>
         <h2 className="text-2xl font-bold mb-2">Data Center</h2>
         <p className="text-slate-500">Configure your data pipeline using local files or cloud warehouses.</p>
@@ -118,35 +114,14 @@ const DataUpload: React.FC<DataUploadProps> = ({ onDataLoaded, bqConfig, setBqCo
                 <h3 className="text-lg font-semibold text-slate-800">{section.title}</h3>
                 <p className="text-xs text-slate-400 mt-1 leading-relaxed">{section.desc}</p>
               </div>
-
               <div className="flex-1 flex flex-col justify-center items-center border-2 border-dashed border-slate-200 rounded-xl p-8 hover:border-blue-400 transition-colors group cursor-pointer relative">
-                <input 
-                  type="file" 
-                  accept=".csv"
-                  className="absolute inset-0 opacity-0 cursor-pointer" 
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleFileUpload(section.id as any, file);
-                  }}
-                />
+                <input type="file" accept=".csv" className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFileUpload(section.id as any, file); }} />
                 {parsing[section.id] ? (
-                  <div className="flex flex-col items-center">
-                    <Loader2 className="w-10 h-10 text-blue-500 animate-spin mb-2" />
-                    <span className="text-sm font-medium text-slate-500">Parsing...</span>
-                  </div>
+                  <div className="flex flex-col items-center"><Loader2 className="w-10 h-10 text-blue-500 animate-spin mb-2" /><span className="text-sm font-medium text-slate-500">Parsing...</span></div>
                 ) : files[section.id] ? (
-                  <div className="flex flex-col items-center text-center">
-                    <FileText className="w-8 h-8 text-blue-500 mb-2" />
-                    <span className="text-sm font-bold text-slate-700 truncate max-w-[150px]">{files[section.id]}</span>
-                    <button onClick={(e) => { e.stopPropagation(); setFiles(prev => ({ ...prev, [section.id]: null })); onDataLoaded(section.id as any, []); }} className="mt-4 text-red-500 hover:text-red-700 text-xs font-bold flex items-center gap-1 bg-red-50 px-3 py-1.5 rounded-lg">
-                      <Trash2 size={14} /> Remove
-                    </button>
-                  </div>
+                  <div className="flex flex-col items-center text-center"><FileText className="w-8 h-8 text-blue-500 mb-2" /><span className="text-sm font-bold text-slate-700 truncate max-w-[150px]">{files[section.id]}</span><button onClick={(e) => { e.stopPropagation(); setFiles(prev => ({ ...prev, [section.id]: null })); onDataLoaded(section.id as any, []); }} className="mt-4 text-red-500 hover:text-red-700 text-xs font-bold flex items-center gap-1 bg-red-50 px-3 py-1.5 rounded-lg"><Trash2 size={14} /> Remove</button></div>
                 ) : (
-                  <>
-                    <Upload className="w-10 h-10 text-slate-300 group-hover:text-blue-500 mb-2 transition-colors" />
-                    <span className="text-sm text-slate-400 font-medium">Click to upload CSV</span>
-                  </>
+                  <><Upload className="w-10 h-10 text-slate-300 group-hover:text-blue-500 mb-2 transition-colors" /><span className="text-sm text-slate-400 font-medium">Click to upload CSV</span></>
                 )}
               </div>
             </div>
@@ -154,12 +129,10 @@ const DataUpload: React.FC<DataUploadProps> = ({ onDataLoaded, bqConfig, setBqCo
         </div>
       </section>
 
-      <section className="bg-slate-900 rounded-3xl p-8 text-white shadow-xl">
+      <section className="bg-slate-900 rounded-3xl p-8 text-white shadow-xl overflow-hidden">
         <div className="flex justify-between items-center mb-8">
           <div className="flex items-center gap-3">
-            <div className="bg-blue-500 p-2 rounded-xl">
-              <Database size={24} />
-            </div>
+            <div className="bg-blue-500 p-2 rounded-xl"><Database size={24} /></div>
             <div>
               <h3 className="text-xl font-bold">Google BigQuery Connector</h3>
               <p className="text-slate-400 text-sm">Fetch ML results directly from your warehouse.</p>
@@ -168,23 +141,14 @@ const DataUpload: React.FC<DataUploadProps> = ({ onDataLoaded, bqConfig, setBqCo
           <div className="flex items-center gap-4">
             {connStatus === 'success' && <span className="text-green-400 text-xs font-bold flex items-center gap-1 bg-green-400/10 px-3 py-1.5 rounded-full border border-green-400/20"><CheckCircle size={14} /> Connected</span>}
             {connStatus === 'error' && <span className="text-red-400 text-xs font-bold flex items-center gap-1 bg-red-400/10 px-3 py-1.5 rounded-full border border-red-400/20"><AlertCircle size={14} /> Error</span>}
-            <button 
-              onClick={handleTestConnection}
-              disabled={testingConn}
-              className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 border border-white/10 disabled:opacity-50"
-            >
+            <button onClick={handleTestConnection} disabled={testingConn} className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 border border-white/10 disabled:opacity-50">
               {testingConn ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
-              Test Connection
+              Test & Preview Data
             </button>
             <label className="flex items-center cursor-pointer ml-4 border-l border-white/10 pl-4">
               <div className="mr-3 text-sm font-bold text-slate-400">Pipeline Enabled</div>
               <div className="relative">
-                <input 
-                  type="checkbox" 
-                  className="sr-only" 
-                  checked={bqConfig.enabled}
-                  onChange={(e) => setBqConfig({ ...bqConfig, enabled: e.target.checked })}
-                />
+                <input type="checkbox" className="sr-only" checked={bqConfig.enabled} onChange={(e) => setBqConfig({ ...bqConfig, enabled: e.target.checked })} />
                 <div className={`block w-14 h-8 rounded-full transition-colors ${bqConfig.enabled ? 'bg-blue-500' : 'bg-slate-700'}`}></div>
                 <div className={`absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${bqConfig.enabled ? 'translate-x-6' : ''}`}></div>
               </div>
@@ -192,70 +156,82 @@ const DataUpload: React.FC<DataUploadProps> = ({ onDataLoaded, bqConfig, setBqCo
           </div>
         </div>
 
-        {errorMsg && (
-          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-400 text-sm flex items-center gap-3">
-            <AlertCircle size={18} />
-            {errorMsg}
-          </div>
-        )}
+        {errorMsg && <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-400 text-sm flex items-center gap-3"><AlertCircle size={18} />{errorMsg}</div>}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-              <Globe size={12} /> Project ID
-            </label>
-            <input 
-              type="text" 
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-all text-white"
-              placeholder="my-gcp-project"
-              value={bqConfig.projectId}
-              onChange={(e) => setBqConfig({ ...bqConfig, projectId: e.target.value })}
-            />
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><Globe size={12} /> Project ID</label>
+            <input type="text" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-all text-white" placeholder="my-gcp-project" value={bqConfig.projectId} onChange={(e) => setBqConfig({ ...bqConfig, projectId: e.target.value })} />
           </div>
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-              <Database size={12} /> Dataset ID
-            </label>
-            <input 
-              type="text" 
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-all text-white"
-              placeholder="demand_planning"
-              value={bqConfig.datasetId}
-              onChange={(e) => setBqConfig({ ...bqConfig, datasetId: e.target.value })}
-            />
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><Database size={12} /> Dataset ID</label>
+            <input type="text" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-all text-white" placeholder="demand_planning" value={bqConfig.datasetId} onChange={(e) => setBqConfig({ ...bqConfig, datasetId: e.target.value })} />
           </div>
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-              <FileText size={12} /> Table ID
-            </label>
-            <input 
-              type="text" 
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-all text-white"
-              placeholder="ml_forecasts"
-              value={bqConfig.tableId}
-              onChange={(e) => setBqConfig({ ...bqConfig, tableId: e.target.value })}
-            />
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><FileText size={12} /> Table ID</label>
+            <input type="text" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-all text-white" placeholder="ml_forecasts" value={bqConfig.tableId} onChange={(e) => setBqConfig({ ...bqConfig, tableId: e.target.value })} />
           </div>
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-              <Key size={12} /> Access Token
-            </label>
-            <input 
-              type="password" 
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-all text-white"
-              placeholder="ya29.a0AfH6S..."
-              value={bqConfig.accessToken}
-              onChange={(e) => setBqConfig({ ...bqConfig, accessToken: e.target.value })}
-            />
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><Key size={12} /> Access Token</label>
+            <input type="password" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-all text-white" placeholder="ya29.a0AfH6S..." value={bqConfig.accessToken} onChange={(e) => setBqConfig({ ...bqConfig, accessToken: e.target.value })} />
           </div>
         </div>
 
-        <div className="mt-8 p-4 bg-slate-800/50 border border-slate-700 rounded-2xl flex items-center gap-4">
-          <div className="bg-yellow-500/20 text-yellow-500 p-2 rounded-lg">
-            <CheckCircle size={18} />
+        {previewRows.length > 0 && (
+          <div className="bg-black/20 rounded-2xl border border-white/5 p-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="flex justify-between items-center mb-6">
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <Table size={14} className="text-blue-400" /> Live Data Discovery (Actual Schema)
+              </h4>
+              <div className="text-[10px] bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full border border-blue-500/20 font-bold uppercase tracking-tighter">
+                {previewFields.length} Columns Found
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="border-b border-white/10 text-slate-400">
+                    {previewFields.map((field) => (
+                      <th key={field} className="py-3 px-4 font-bold tracking-wider">
+                        <div className="flex flex-col gap-1">
+                          <span>{field}</span>
+                          <span className="text-[9px] font-normal opacity-50 uppercase">
+                            {field.toLowerCase().includes('date') ? 'Dimension' : 'Metric'}
+                          </span>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {previewRows.map((row, i) => (
+                    <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors group">
+                      {previewFields.map((field) => {
+                        const val = row[field];
+                        const isDate = field.toLowerCase().includes('date') || field.toLowerCase().includes('ds');
+                        return (
+                          <td key={field} className={`py-4 px-4 font-mono ${isDate ? 'text-blue-300' : 'text-slate-100'}`}>
+                            {typeof val === 'number' ? val.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : 
+                             (typeof val === 'string' && isDate ? val.split('T')[0] : String(val || '—'))}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-6 flex items-center gap-3 text-slate-500 text-[10px] italic">
+              <Activity size={12} className="text-blue-500" />
+              Showing first 5 rows found in your BigQuery table. These headers will be mapped to the Forecast Engine.
+            </div>
           </div>
+        )}
+
+        <div className="mt-8 p-4 bg-slate-800/50 border border-slate-700 rounded-2xl flex items-center gap-4">
+          <div className="bg-yellow-500/20 text-yellow-500 p-2 rounded-lg"><AlertCircle size={18} /></div>
           <p className="text-xs text-slate-400">
-            <strong>Pro Tip:</strong> Ensure your BigQuery table has a <code className="bg-slate-700 px-1 py-0.5 rounded text-slate-200">date</code> column and numeric columns for your models (e.g., <code className="bg-slate-700 px-1 py-0.5 rounded text-slate-200">xgboost</code>).
+            <strong>System Auto-Mapping:</strong> PredictX will automatically identify columns like <code className="bg-slate-700 px-1 py-0.5 rounded text-slate-200">ds</code>, <code className="bg-slate-700 px-1 py-0.5 rounded text-slate-200">prediction</code>, or <code className="bg-slate-700 px-1 py-0.5 rounded text-slate-200">xgb</code> to populate your charts.
           </p>
         </div>
       </section>

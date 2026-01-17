@@ -50,8 +50,6 @@ const App: React.FC = () => {
   };
 
   const handleGenerateForecast = useCallback(async () => {
-    // We only need to block if we are simulating without any data at all.
-    // If BigQuery is enabled, we proceed even without local sales CSV.
     if (sales.length === 0 && !bqConfig.enabled) {
       alert("Please upload sales history in Data Center or enable BigQuery connection.");
       setView('UPLOAD');
@@ -60,7 +58,6 @@ const App: React.FC = () => {
     
     setLoading(true);
     try {
-      // 1. Process Historical Data (if available)
       let historicalPoints: ForecastPoint[] = [];
       if (sales.length > 0) {
         let filteredSales = [...sales];
@@ -87,20 +84,19 @@ const App: React.FC = () => {
         }));
       }
 
-      // 2. Process Forecast Data
       let forecastResults: ForecastPoint[] = [];
       if (bqConfig.enabled && bqConfig.accessToken) {
         setActiveDataSource('BIGQUERY');
-        forecastResults = await fetchForecastFromBigQuery(
+        const bqResult = await fetchForecastFromBigQuery(
           bqConfig.projectId,
           bqConfig.datasetId,
           bqConfig.tableId,
           bqConfig.accessToken
         );
+        forecastResults = bqResult.mappedData;
       } else {
         setActiveDataSource('SIMULATION');
-        // We need filteredSales here for Gemini to know what to project
-        const filteredSalesForGemini = sales.length > 0 ? sales : []; // Simplified for brevity
+        const filteredSalesForGemini = sales.length > 0 ? sales : []; 
         forecastResults = await generateForecast(filteredSalesForGemini, items, promos, drivers);
       }
       
