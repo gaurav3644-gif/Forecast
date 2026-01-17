@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import Sidebar from './components/Sidebar';
 import DataUpload from './components/DataUpload';
 import ForecastView from './components/ForecastView';
@@ -14,27 +14,9 @@ const DEFAULT_DRIVERS: DriverSetting[] = [
   { id: 'season', name: 'Seasonal Strength', value: 0, min: -30, max: 30, step: 5, description: 'Amplifies or dampens cyclical trends.' },
 ];
 
-// Initial Demo Data
-const MOCK_SALES: SalesData[] = [
-  { date: '2023-01-01', sku: 'SKU001', quantity: 120, price: 15.99 },
-  { date: '2023-02-01', sku: 'SKU001', quantity: 130, price: 15.99 },
-  { date: '2023-03-01', sku: 'SKU001', quantity: 125, price: 15.99 },
-  { date: '2023-04-01', sku: 'SKU001', quantity: 140, price: 15.99 },
-  { date: '2023-05-01', sku: 'SKU001', quantity: 155, price: 15.99 },
-  { date: '2023-06-01', sku: 'SKU001', quantity: 145, price: 15.99 },
-  { date: '2023-07-01', sku: 'SKU001', quantity: 160, price: 15.99 },
-  { date: '2023-08-01', sku: 'SKU001', quantity: 175, price: 15.99 },
-  { date: '2023-09-01', sku: 'SKU001', quantity: 190, price: 15.99 },
-  { date: '2023-10-01', sku: 'SKU001', quantity: 210, price: 15.99 },
-  { date: '2023-11-01', sku: 'SKU001', quantity: 245, price: 15.99 },
-  { date: '2023-12-01', sku: 'SKU001', quantity: 450, price: 15.99 },
-  { date: '2024-01-01', sku: 'SKU001', quantity: 220, price: 15.99 },
-  { date: '2024-02-01', sku: 'SKU001', quantity: 215, price: 15.99 },
-];
-
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>('DASHBOARD');
-  const [sales, setSales] = useState<SalesData[]>(MOCK_SALES);
+  const [sales, setSales] = useState<SalesData[]>([]);
   const [items, setItems] = useState<ItemMaster[]>([]);
   const [promos, setPromos] = useState<Promotion[]>([]);
   const [drivers, setDrivers] = useState<DriverSetting[]>(DEFAULT_DRIVERS);
@@ -42,11 +24,17 @@ const App: React.FC = () => {
   const [insights, setInsights] = useState<string>("");
   const [loading, setLoading] = useState(false);
 
+  // Filter state
+  const [filters, setFilters] = useState({
+    category: 'All Categories',
+    brand: 'All Brands',
+    sku: 'All SKUs'
+  });
+
   const handleDataLoaded = (type: 'SALES' | 'ITEM' | 'PROMO', data: any[]) => {
     if (type === 'SALES') {
-      // If data is provided, use it. If data is cleared (empty array), fallback to mock or empty.
-      setSales(data.length > 0 ? data : MOCK_SALES);
-      setCombinedData([]); // Reset the forecast when source data changes
+      setSales(data);
+      setCombinedData([]); 
     }
     if (type === 'ITEM') setItems(data);
     if (type === 'PROMO') setPromos(data);
@@ -54,31 +42,57 @@ const App: React.FC = () => {
 
   const handleGenerateForecast = useCallback(async () => {
     if (sales.length === 0) {
-      alert("Please upload sales data first.");
+      alert("Please upload sales data in the Data Center first.");
+      setView('UPLOAD');
       return;
     }
     
     setLoading(true);
     try {
-      const sortedSales = [...sales].sort((a, b) => a.date.localeCompare(b.date));
-      const historicalPoints: ForecastPoint[] = sortedSales.map(s => ({
-        date: s.date,
-        actual: s.quantity
+      // 1. Filter sales based on SKU attributes
+      let filteredSales = [...sales];
+      if (filters.category !== 'All Categories' || filters.brand !== 'All Brands' || filters.sku !== 'All SKUs') {
+        const itemMap = new Map<string, ItemMaster>(items.map(i => [i.sku, i]));
+        filteredSales = sales.filter(s => {
+          // Fix: itemMap.get() returns ItemMaster | undefined now that itemMap is typed
+          const item = itemMap.get(s.sku);
+          const matchCat = filters.category === 'All Categories' || item?.category === filters.category;
+          const matchBrand = filters.brand === 'All Brands' || item?.brand === filters.brand;
+          const matchSKU = filters.sku === 'All SKUs' || s.sku === filters.sku;
+          return matchCat && matchBrand && matchSKU;
+        });
+      }
+
+      // 2. Aggregate Sales by Date (Month)
+      const aggregated = filteredSales.reduce((acc, curr) => {
+        const date = curr.date;
+        if (!acc[date]) acc[date] = 0;
+        acc[date] += curr.quantity;
+        return acc;
+      }, {} as Record<string, number>);
+
+      const sortedDates = Object.keys(aggregated).sort();
+      const historicalPoints: ForecastPoint[] = sortedDates.map(date => ({
+        date,
+        actual: aggregated[date]
       }));
 
-      const forecastResults = await generateForecast(sortedSales, items, promos, drivers);
+      // 3. Generate Forecast for this specific segment
+      const forecastResults = await generateForecast(filteredSales, items, promos, drivers);
+      
+      // 4. Merge
       const merged = [...historicalPoints, ...forecastResults].sort((a, b) => a.date.localeCompare(b.date));
 
       setCombinedData(merged);
-      
       const aiText = await analyzeForecast(forecastResults);
       setInsights(aiText);
     } catch (err) {
       console.error(err);
+      alert("Forecasting engine encountered an error. Please check your data format.");
     } finally {
       setLoading(false);
     }
-  }, [sales, items, promos, drivers]);
+  }, [sales, items, promos, drivers, filters]);
 
   const handleDriverChange = (id: string, value: number) => {
     setDrivers(prev => prev.map(d => d.id === id ? { ...d, value } : d));
@@ -91,16 +105,31 @@ const App: React.FC = () => {
       case 'UPLOAD':
         return <DataUpload onDataLoaded={handleDataLoaded} />;
       case 'FORECAST':
-        return <ForecastView data={combinedData} isLoading={loading} onGenerate={handleGenerateForecast} insights={insights} />;
+        return (
+          <ForecastView 
+            data={combinedData} 
+            isLoading={loading} 
+            onGenerate={handleGenerateForecast} 
+            insights={insights}
+            items={items}
+            filters={filters}
+            setFilters={setFilters}
+          />
+        );
       case 'SCENARIO':
         return <ScenarioPlanner drivers={drivers} onDriverChange={handleDriverChange} onReset={handleResetDrivers} />;
       case 'DASHBOARD':
       default:
         return (
           <div className="space-y-8">
-            <div>
-              <h2 className="text-3xl font-bold text-slate-800">Demand Planning Dashboard</h2>
-              <p className="text-slate-500">Global overview of supply chain performance and predictive health.</p>
+            <div className="flex justify-between items-end">
+              <div>
+                <h2 className="text-3xl font-bold text-slate-800">Demand Planning Dashboard</h2>
+                <p className="text-slate-500">Global overview of supply chain performance and predictive health.</p>
+              </div>
+              <div className="bg-white px-4 py-2 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 shadow-sm">
+                Active Project: <span className="text-blue-600 font-bold">Standard_Supply_Chain_V1</span>
+              </div>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -109,23 +138,23 @@ const App: React.FC = () => {
                   <div className="bg-blue-100 p-2 rounded-xl text-blue-600"><LayoutDashboard size={20} /></div>
                   <span className="text-xs font-bold text-green-500 bg-green-50 px-2 py-1 rounded">+12.5%</span>
                 </div>
-                <div className="text-3xl font-bold">4,120</div>
-                <div className="text-slate-400 text-sm font-medium mt-1">Forecast Volume (Next 6M)</div>
+                <div className="text-3xl font-bold">{sales.length > 0 ? sales.reduce((a,b) => a + b.quantity, 0).toLocaleString() : '0'}</div>
+                <div className="text-slate-400 text-sm font-medium mt-1">Total Loaded Volume</div>
               </div>
               <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm transition-transform hover:scale-[1.02]">
                 <div className="flex justify-between items-start mb-4">
                   <div className="bg-purple-100 p-2 rounded-xl text-purple-600"><Activity size={20} /></div>
-                  <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-1 rounded">-2.1%</span>
+                  <span className="text-xs font-bold text-blue-500 bg-blue-50 px-2 py-1 rounded">Live</span>
                 </div>
-                <div className="text-3xl font-bold">92.8%</div>
-                <div className="text-slate-400 text-sm font-medium mt-1">Backtest Accuracy (WAPE)</div>
+                <div className="text-3xl font-bold">{items.length}</div>
+                <div className="text-slate-400 text-sm font-medium mt-1">Active SKUs in Master</div>
               </div>
               <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm transition-transform hover:scale-[1.02]">
                 <div className="flex justify-between items-start mb-4">
                   <div className="bg-yellow-100 p-2 rounded-xl text-yellow-600"><AlertTriangle size={20} /></div>
                 </div>
-                <div className="text-3xl font-bold">08</div>
-                <div className="text-slate-400 text-sm font-medium mt-1">High Variance SKUs</div>
+                <div className="text-3xl font-bold">{promos.length}</div>
+                <div className="text-slate-400 text-sm font-medium mt-1">Planned Promotions</div>
               </div>
             </div>
 
@@ -137,7 +166,9 @@ const App: React.FC = () => {
                     <Database size={18} className="text-slate-400" />
                     <span className="text-sm font-medium text-slate-700">Enterprise Data Lake</span>
                   </div>
-                  <span className="px-3 py-1 bg-green-100 text-green-600 text-[10px] font-bold uppercase rounded-full tracking-wider border border-green-200">Connected</span>
+                  <span className={`px-3 py-1 text-[10px] font-bold uppercase rounded-full tracking-wider border ${sales.length > 0 ? 'bg-green-100 text-green-600 border-green-200' : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
+                    {sales.length > 0 ? 'Connected' : 'Disconnected'}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
                   <div className="flex items-center gap-3">
@@ -154,10 +185,12 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen flex bg-slate-50">
       <Sidebar currentView={view} setView={setView} />
-      <main className="ml-64 flex-1 p-12 overflow-y-auto max-w-7xl mx-auto">
-        {renderView()}
+      <main className="ml-64 flex-1 p-12 overflow-y-auto">
+        <div className="max-w-7xl mx-auto">
+          {renderView()}
+        </div>
       </main>
     </div>
   );
